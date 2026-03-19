@@ -62,3 +62,33 @@ def test_reasoning_budget_soft_penalty_validation():
         assert "reasoning_soft_penalty_coefficient" in str(e)
     else:
         raise AssertionError("Expected coefficient validation error")
+
+
+def test_reasoning_budget_soft_penalty_stops_after_end_token_failsafe():
+    output_token_ids: list[int] = [5, 3]
+    params = SamplingParams(
+        reasoning_soft_penalty_start_threshold=0,
+        reasoning_soft_penalty_coefficient=3.0,
+        reasoning_soft_penalty_curve="linear",
+        reasoning_soft_penalty_end_token_id=3,
+    )
+    processor = ReasoningBudgetLogitsProcessor(
+        None, torch.device("cpu"), is_pin_memory=False
+    )
+    processor.update_state(
+        BatchUpdate(
+            batch_size=1,
+            removed=(),
+            moved=(),
+            added=((0, params, [], output_token_ids),),
+        )
+    )
+
+    # Simulate stale/corrupted state where reasoning flag did not flip.
+    req_info = processor.req_info[0]
+    req_info.is_reasoning = True
+    req_info.processed_len = len(output_token_ids)
+
+    logits = torch.zeros(1, 8)
+    out = processor.apply(logits.clone())
+    assert torch.equal(out, logits)

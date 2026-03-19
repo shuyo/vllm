@@ -304,6 +304,13 @@ class _ReasoningBudgetReqInfo:
     processed_len: int = 0
 
     def update_from_output_tokens(self) -> None:
+        # Fail-safe: if end token is already present in generated output, stop
+        # applying reasoning soft-penalty from this step onward.
+        if self.is_reasoning and self.end_token_id in self.output_token_ids:
+            self.is_reasoning = False
+            self.processed_len = len(self.output_token_ids)
+            return
+
         if self.processed_len >= len(self.output_token_ids):
             return
 
