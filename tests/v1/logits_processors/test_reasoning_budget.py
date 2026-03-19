@@ -124,3 +124,32 @@ def test_reasoning_budget_ignores_placeholder_tokens():
     out = processor.apply(logits.clone())
     # threshold not reached yet because -1 placeholders are ignored
     assert torch.equal(out, logits)
+
+
+def test_reasoning_budget_counts_non_prefix_valid_tokens():
+    # Placeholders can appear before valid ids in async/spec paths.
+    output_token_ids: list[int] = [-1, -1, 20, 21]
+    params = SamplingParams(
+        reasoning_soft_penalty_start_threshold=1,
+        reasoning_soft_penalty_coefficient=1.0,
+        reasoning_soft_penalty_curve="linear",
+        reasoning_soft_penalty_end_token_id=3,
+    )
+    processor = ReasoningBudgetLogitsProcessor(
+        None, torch.device("cpu"), is_pin_memory=False
+    )
+    processor.update_state(
+        BatchUpdate(
+            batch_size=1,
+            removed=(),
+            moved=(),
+            added=((0, params, [], output_token_ids),),
+        )
+    )
+    req_info = processor.req_info[0]
+    assert req_info.reasoning_token_count == 2
+
+    logits = torch.zeros(1, 8)
+    out = processor.apply(logits.clone())
+    # threshold reached => penalty is applied
+    assert out[0, 1].item() < 0

@@ -306,32 +306,25 @@ class _ReasoningBudgetReqInfo:
     reasoning_token_count: int = 0
     processed_len: int = 0
 
+    def valid_output_tokens(self) -> list[int]:
+        # Async scheduling/spec decode may include -1 placeholders.
+        # Treat only non-negative IDs as actual generated tokens.
+        return [tok for tok in self.output_token_ids if tok >= 0]
+
     def valid_output_len(self) -> int:
-        try:
-            return self.output_token_ids.index(-1)
-        except ValueError:
-            return len(self.output_token_ids)
+        return len(self.valid_output_tokens())
 
     def update_from_output_tokens(self) -> None:
-        valid_len = self.valid_output_len()
-
-        # Fail-safe: if end token is already present in generated output, stop
-        # applying reasoning soft-penalty from this step onward.
-        if self.is_reasoning and self.end_token_id in self.output_token_ids[:valid_len]:
+        valid_tokens = self.valid_output_tokens()
+        self.processed_len = len(valid_tokens)
+        if self.end_token_id in valid_tokens:
+            # Only tokens before first end token are considered reasoning.
+            first_end = valid_tokens.index(self.end_token_id)
+            self.reasoning_token_count = first_end
             self.is_reasoning = False
-            self.processed_len = valid_len
             return
-
-        if self.processed_len >= valid_len:
-            return
-
-        for token_id in self.output_token_ids[self.processed_len : valid_len]:
-            if self.is_reasoning:
-                if token_id == self.end_token_id:
-                    self.is_reasoning = False
-                else:
-                    self.reasoning_token_count += 1
-            self.processed_len += 1
+        self.reasoning_token_count = len(valid_tokens)
+        self.is_reasoning = True
 
     def current_penalty(self) -> float:
         if not self.is_reasoning:
@@ -458,7 +451,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     req_info.reasoning_token_count,
                     req_info.start_threshold,
                     req_info.end_token_id,
-                    req_info.output_token_ids[max(0, req_info.valid_output_len() - 8) : req_info.valid_output_len()],
+                    req_info.valid_output_tokens()[-8:],
                 )
         return logits
 
