@@ -39,11 +39,12 @@ def test_reasoning_budget_soft_penalty_flow():
     assert out[0, 3].item() == 2.0
     assert out[0, 1].item() == -2.0
 
-    # After end token has appeared, no further soft penalty.
+    # After end token has appeared, disable repeated end token generation.
     output_token_ids.append(3)
     logits_after = torch.zeros(1, 8)
     out = processor.apply(logits_after.clone())
-    assert torch.equal(out, logits_after)
+    assert torch.isneginf(out[0, 3])
+    assert out[0, 1].item() == 0.0
 
 
 def test_reasoning_budget_soft_penalty_validation():
@@ -91,4 +92,4 @@ def test_reasoning_budget_soft_penalty_stops_after_end_token_failsafe():
 
     logits = torch.zeros(1, 8)
     out = processor.apply(logits.clone())
-    assert torch.equal(out, logits)
+    assert torch.isneginf(out[0, 3])

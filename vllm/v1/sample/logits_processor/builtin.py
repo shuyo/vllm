@@ -384,10 +384,15 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
 
         for req_idx, req_info in self.req_info.items():
             req_info.update_from_output_tokens()
+            req_logits = logits[req_idx]
+            if not req_info.is_reasoning:
+                # Once reasoning has ended, prevent repeated emission of
+                # the reasoning-end token.
+                req_logits[req_info.end_token_id] = -float("inf")
+                continue
             penalty = req_info.current_penalty()
             if penalty <= 0:
                 continue
-            req_logits = logits[req_idx]
             # Soft penalty:
             # - Before threshold: unchanged.
             # - After threshold: negative bias for continuation side tokens.
