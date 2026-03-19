@@ -343,6 +343,18 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "numeric values, used by custom extensions."
         ),
     )
+    reasoning_soft_penalty_start_threshold: int | None = Field(
+        default=None, description="Reasoning soft-penalty start threshold."
+    )
+    reasoning_soft_penalty_coefficient: float | None = Field(
+        default=None, description="Reasoning soft-penalty coefficient."
+    )
+    reasoning_soft_penalty_curve: str | None = Field(
+        default=None, description="Reasoning soft-penalty growth curve."
+    )
+    reasoning_soft_penalty_end_token_id: int | None = Field(
+        default=None, description="Reasoning end token id for soft-penalty."
+    )
 
     repetition_detection: RepetitionDetectionParams | None = Field(
         default=None,
@@ -516,6 +528,14 @@ class ChatCompletionRequest(OpenAIBaseModel):
             logit_bias=self.logit_bias,
             bad_words=self.bad_words,
             allowed_token_ids=self.allowed_token_ids,
+            reasoning_soft_penalty_start_threshold=(
+                self.reasoning_soft_penalty_start_threshold
+            ),
+            reasoning_soft_penalty_coefficient=self.reasoning_soft_penalty_coefficient,
+            reasoning_soft_penalty_curve=self.reasoning_soft_penalty_curve,
+            reasoning_soft_penalty_end_token_id=(
+                self.reasoning_soft_penalty_end_token_id
+            ),
             extra_args=extra_args or None,
             skip_clone=True,  # Created fresh per request, safe to skip clone
             repetition_detection=self.repetition_detection,

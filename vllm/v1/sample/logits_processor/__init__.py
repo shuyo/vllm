@@ -18,6 +18,7 @@ from vllm.v1.sample.logits_processor.builtin import (
     LogitBiasLogitsProcessor,
     MinPLogitsProcessor,
     MinTokensLogitsProcessor,
+    ReasoningBudgetLogitsProcessor,
     process_dict_updates,
 )
 from vllm.v1.sample.logits_processor.interface import (
@@ -50,6 +51,7 @@ BUILTIN_LOGITS_PROCESSORS: list[type[LogitsProcessor]] = [
     MinTokensLogitsProcessor,
     LogitBiasLogitsProcessor,
     MinPLogitsProcessor,
+    ReasoningBudgetLogitsProcessor,
 ]
 
 
@@ -224,6 +226,31 @@ def validate_logits_processors_parameters(
     logits_processors: Sequence[str | type[LogitsProcessor]] | None,
     sampling_params: SamplingParams,
 ):
+    if sampling_params.reasoning_soft_penalty_start_threshold is not None:
+        if sampling_params.reasoning_soft_penalty_start_threshold < 0:
+            raise ValueError(
+                "reasoning_soft_penalty_start_threshold must be >= 0."
+            )
+    if sampling_params.reasoning_soft_penalty_coefficient is not None:
+        coefficient = sampling_params.reasoning_soft_penalty_coefficient
+        if not 0 <= coefficient <= 100:
+            raise ValueError(
+                "reasoning_soft_penalty_coefficient must be in [0, 100]."
+            )
+    if sampling_params.reasoning_soft_penalty_curve is not None:
+        if sampling_params.reasoning_soft_penalty_curve not in {
+            "linear",
+            "quadratic",
+            "exp",
+        }:
+            raise ValueError(
+                "reasoning_soft_penalty_curve must be one of "
+                "{'linear', 'quadratic', 'exp'}."
+            )
+    if sampling_params.reasoning_soft_penalty_end_token_id is not None:
+        if sampling_params.reasoning_soft_penalty_end_token_id < 0:
+            raise ValueError("reasoning_soft_penalty_end_token_id must be >= 0.")
+
     logits_processors = (
         tuple(logits_processors) if logits_processors is not None else None
     )
@@ -346,6 +373,7 @@ __all__ = [
     "LogitBiasLogitsProcessor",
     "MinPLogitsProcessor",
     "MinTokensLogitsProcessor",
+    "ReasoningBudgetLogitsProcessor",
     "BatchUpdate",
     "BatchUpdateBuilder",
     "MoveDirectionality",

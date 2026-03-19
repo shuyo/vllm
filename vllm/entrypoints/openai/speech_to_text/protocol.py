@@ -172,6 +172,10 @@ class TranscriptionRequest(OpenAIBaseModel):
 
     max_completion_tokens: int | None = None
     """The maximum number of tokens to generate."""
+    reasoning_soft_penalty_start_threshold: int | None = None
+    reasoning_soft_penalty_coefficient: float | None = None
+    reasoning_soft_penalty_curve: str | None = None
+    reasoning_soft_penalty_end_token_id: int | None = None
     # --8<-- [end:transcription-sampling-params]
 
     # Default sampling parameters for transcription requests.
@@ -248,6 +252,14 @@ class TranscriptionRequest(OpenAIBaseModel):
             frequency_penalty=self.frequency_penalty,
             repetition_penalty=repetition_penalty,
             presence_penalty=self.presence_penalty,
+            reasoning_soft_penalty_start_threshold=(
+                self.reasoning_soft_penalty_start_threshold
+            ),
+            reasoning_soft_penalty_coefficient=self.reasoning_soft_penalty_coefficient,
+            reasoning_soft_penalty_curve=self.reasoning_soft_penalty_curve,
+            reasoning_soft_penalty_end_token_id=(
+                self.reasoning_soft_penalty_end_token_id
+            ),
             output_kind=RequestOutputKind.DELTA
             if self.stream
             else RequestOutputKind.FINAL_ONLY,
@@ -465,6 +477,10 @@ class TranslationRequest(OpenAIBaseModel):
 
     max_completion_tokens: int | None = None
     """The maximum number of tokens to generate."""
+    reasoning_soft_penalty_start_threshold: int | None = None
+    reasoning_soft_penalty_coefficient: float | None = None
+    reasoning_soft_penalty_curve: str | None = None
+    reasoning_soft_penalty_end_token_id: int | None = None
     # --8<-- [end:translation-extra-params]
 
     # Default sampling parameters for translation requests.
@@ -512,6 +528,14 @@ class TranslationRequest(OpenAIBaseModel):
             temperature=temperature,
             max_tokens=max_tokens,
             seed=self.seed,
+            reasoning_soft_penalty_start_threshold=(
+                self.reasoning_soft_penalty_start_threshold
+            ),
+            reasoning_soft_penalty_coefficient=self.reasoning_soft_penalty_coefficient,
+            reasoning_soft_penalty_curve=self.reasoning_soft_penalty_curve,
+            reasoning_soft_penalty_end_token_id=(
+                self.reasoning_soft_penalty_end_token_id
+            ),
             output_kind=RequestOutputKind.DELTA
             if self.stream
             else RequestOutputKind.FINAL_ONLY,

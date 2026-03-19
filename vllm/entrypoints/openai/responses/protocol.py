@@ -252,6 +252,18 @@ class ResponsesRequest(OpenAIBaseModel):
             "numeric values, used by custom extensions."
         ),
     )
+    reasoning_soft_penalty_start_threshold: int | None = Field(
+        default=None, description="Reasoning soft-penalty start threshold."
+    )
+    reasoning_soft_penalty_coefficient: float | None = Field(
+        default=None, description="Reasoning soft-penalty coefficient."
+    )
+    reasoning_soft_penalty_curve: str | None = Field(
+        default=None, description="Reasoning soft-penalty growth curve."
+    )
+    reasoning_soft_penalty_end_token_id: int | None = Field(
+        default=None, description="Reasoning end token id for soft-penalty."
+    )
     # --8<-- [end:responses-extra-params]
 
     def build_chat_params(
@@ -367,6 +379,14 @@ class ResponsesRequest(OpenAIBaseModel):
             ),
             structured_outputs=structured_outputs,
             logit_bias=self.logit_bias,
+            reasoning_soft_penalty_start_threshold=(
+                self.reasoning_soft_penalty_start_threshold
+            ),
+            reasoning_soft_penalty_coefficient=self.reasoning_soft_penalty_coefficient,
+            reasoning_soft_penalty_curve=self.reasoning_soft_penalty_curve,
+            reasoning_soft_penalty_end_token_id=(
+                self.reasoning_soft_penalty_end_token_id
+            ),
             extra_args=self.vllm_xargs or {},
             skip_clone=True,  # Created fresh per request, safe to skip clone
             skip_special_tokens=self.skip_special_tokens,

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
@@ -288,6 +289,104 @@ class MinTokensLogitsProcessor(LogitsProcessor):
             )
             logits.index_put_(logits_slice, self.neg_inf_tensor)
 
+        return logits
+
+
+@dataclass
+class _ReasoningBudgetReqInfo:
+    output_token_ids: list[int]
+    end_token_id: int
+    start_threshold: int
+    coefficient: float
+    curve: str
+    is_reasoning: bool = True
+    reasoning_token_count: int = 0
+    processed_len: int = 0
+
+    def update_from_output_tokens(self) -> None:
+        if self.processed_len >= len(self.output_token_ids):
+            return
+
+        for token_id in self.output_token_ids[self.processed_len :]:
+            if self.is_reasoning:
+                if token_id == self.end_token_id:
+                    self.is_reasoning = False
+                else:
+                    self.reasoning_token_count += 1
+            self.processed_len += 1
+
+    def current_penalty(self) -> float:
+        if not self.is_reasoning:
+            return 0.0
+
+        overflow = self.reasoning_token_count - self.start_threshold
+        if overflow < 0:
+            return 0.0
+        if self.curve == "linear":
+            return self.coefficient * (overflow + 1)
+        if self.curve == "quadratic":
+            growth = overflow + 1
+            return self.coefficient * (growth**2)
+        # "exp"
+        return self.coefficient * (2**overflow)
+
+
+class ReasoningBudgetLogitsProcessor(LogitsProcessor):
+    """Soft-penalty logits processor for reasoning budget control."""
+
+    def __init__(self, _, device: torch.device, is_pin_memory: bool):
+        self.device = device
+        self.pin_memory = is_pin_memory
+        self.req_info: dict[int, _ReasoningBudgetReqInfo] = {}
+
+    def is_argmax_invariant(self) -> bool:
+        return False
+
+    @staticmethod
+    def add_request(
+        params: SamplingParams, _: list[int] | None, output_tok_ids: list[int]
+    ) -> _ReasoningBudgetReqInfo | None:
+        threshold = params.reasoning_soft_penalty_start_threshold
+        coefficient = params.reasoning_soft_penalty_coefficient
+        curve = params.reasoning_soft_penalty_curve
+        end_token_id = params.reasoning_soft_penalty_end_token_id
+        if (
+            threshold is None
+            or coefficient is None
+            or curve is None
+            or end_token_id is None
+            or coefficient == 0
+        ):
+            return None
+        req_info = _ReasoningBudgetReqInfo(
+            output_token_ids=output_tok_ids,
+            end_token_id=end_token_id,
+            start_threshold=threshold,
+            coefficient=coefficient,
+            curve=curve,
+        )
+        req_info.update_from_output_tokens()
+        return req_info
+
+    def update_state(self, batch_update: BatchUpdate | None):
+        process_dict_updates(self.req_info, batch_update, self.add_request)
+
+    def apply(self, logits: torch.Tensor) -> torch.Tensor:
+        if not self.req_info:
+            return logits
+
+        for req_idx, req_info in self.req_info.items():
+            req_info.update_from_output_tokens()
+            penalty = req_info.current_penalty()
+            if penalty <= 0:
+                continue
+            req_logits = logits[req_idx]
+            # Soft penalty:
+            # - Before threshold: unchanged.
+            # - After threshold: negative bias for continuation side tokens.
+            # - Positive bias for end token to encourage natural completion.
+            req_logits.sub_(penalty)
+            req_logits[req_info.end_token_id] += 2 * penalty
         return logits
 
 
