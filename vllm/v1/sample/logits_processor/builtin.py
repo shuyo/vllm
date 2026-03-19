@@ -2,12 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import os
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 import torch
 
 from vllm import SamplingParams
+from vllm.logger import init_logger
 from vllm.v1.sample.logits_processor.interface import (
     BatchUpdate,
     LogitsProcessor,
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
     from vllm.config import VllmConfig
 
 T = TypeVar("T")
+logger = init_logger(__name__)
 
 
 class MinPLogitsProcessor(LogitsProcessor):
@@ -345,6 +348,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
         self.device = device
         self.pin_memory = is_pin_memory
         self.req_info: dict[int, _ReasoningBudgetReqInfo] = {}
+        self.debug_enabled = os.getenv("VLLM_DEBUG_REASONING_BUDGET", "") == "1"
 
     def is_argmax_invariant(self) -> bool:
         return False
@@ -364,6 +368,15 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             or end_token_id is None
             or coefficient == 0
         ):
+            if logger.isEnabledFor(10):
+                logger.debug(
+                    "ReasoningBudget disabled for request: "
+                    "threshold=%s coefficient=%s curve=%s end_token_id=%s",
+                    threshold,
+                    coefficient,
+                    curve,
+                    end_token_id,
+                )
             return None
         req_info = _ReasoningBudgetReqInfo(
             output_token_ids=output_tok_ids,
@@ -377,6 +390,16 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
 
     def update_state(self, batch_update: BatchUpdate | None):
         process_dict_updates(self.req_info, batch_update, self.add_request)
+        if self.debug_enabled and batch_update is not None:
+            logger.info(
+                "ReasoningBudget update_state: batch_size=%s active_reqs=%s "
+                "added=%s removed=%s moved=%s",
+                batch_update.batch_size,
+                sorted(self.req_info.keys()),
+                len(batch_update.added),
+                len(batch_update.removed),
+                len(batch_update.moved),
+            )
 
     def apply(self, logits: torch.Tensor) -> torch.Tensor:
         if not self.req_info:
@@ -389,9 +412,27 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                 # Once reasoning has ended, prevent repeated emission of
                 # the reasoning-end token.
                 req_logits[req_info.end_token_id] = -float("inf")
+                if self.debug_enabled:
+                    logger.info(
+                        "ReasoningBudget req=%s reasoning ended: "
+                        "mask end_token_id=%s out_len=%s reason_count=%s",
+                        req_idx,
+                        req_info.end_token_id,
+                        len(req_info.output_token_ids),
+                        req_info.reasoning_token_count,
+                    )
                 continue
             penalty = req_info.current_penalty()
             if penalty <= 0:
+                if self.debug_enabled:
+                    logger.info(
+                        "ReasoningBudget req=%s no penalty: "
+                        "reason_count=%s threshold=%s out_len=%s",
+                        req_idx,
+                        req_info.reasoning_token_count,
+                        req_info.start_threshold,
+                        len(req_info.output_token_ids),
+                    )
                 continue
             # Soft penalty:
             # - Before threshold: unchanged.
@@ -399,6 +440,18 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             # - Positive bias for end token to encourage natural completion.
             req_logits.sub_(penalty)
             req_logits[req_info.end_token_id] += 2 * penalty
+            if self.debug_enabled:
+                logger.info(
+                    "ReasoningBudget req=%s apply penalty=%s curve=%s "
+                    "reason_count=%s threshold=%s end_token_id=%s out_tail=%s",
+                    req_idx,
+                    penalty,
+                    req_info.curve,
+                    req_info.reasoning_token_count,
+                    req_info.start_threshold,
+                    req_info.end_token_id,
+                    req_info.output_token_ids[-8:],
+                )
         return logits
 
 
