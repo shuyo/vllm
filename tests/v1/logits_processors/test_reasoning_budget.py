@@ -93,3 +93,34 @@ def test_reasoning_budget_soft_penalty_stops_after_end_token_failsafe():
     logits = torch.zeros(1, 8)
     out = processor.apply(logits.clone())
     assert torch.isneginf(out[0, 3])
+
+
+def test_reasoning_budget_ignores_placeholder_tokens():
+    output_token_ids: list[int] = [10, 11, -1, -1]
+    params = SamplingParams(
+        reasoning_soft_penalty_start_threshold=3,
+        reasoning_soft_penalty_coefficient=1.0,
+        reasoning_soft_penalty_curve="linear",
+        reasoning_soft_penalty_end_token_id=3,
+    )
+    processor = ReasoningBudgetLogitsProcessor(
+        None, torch.device("cpu"), is_pin_memory=False
+    )
+    processor.update_state(
+        BatchUpdate(
+            batch_size=1,
+            removed=(),
+            moved=(),
+            added=((0, params, [], output_token_ids),),
+        )
+    )
+
+    # only valid tokens before first -1 should be counted
+    req_info = processor.req_info[0]
+    assert req_info.reasoning_token_count == 2
+    assert req_info.processed_len == 2
+
+    logits = torch.zeros(1, 8)
+    out = processor.apply(logits.clone())
+    # threshold not reached yet because -1 placeholders are ignored
+    assert torch.equal(out, logits)
