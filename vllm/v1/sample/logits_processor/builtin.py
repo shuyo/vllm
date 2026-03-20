@@ -305,6 +305,7 @@ class _ReasoningBudgetReqInfo:
     is_reasoning: bool = True
     reasoning_token_count: int = 0
     processed_len: int = 0
+    missing_token_ids_logged: bool = False
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -459,11 +460,6 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             penalty = req_info.current_penalty()
             if penalty <= 0:
                 used_fallback = False
-                if req_info.is_reasoning and req_info.valid_output_len() == 0:
-                    # Fallback for async/spec paths where output IDs may remain
-                    # placeholders for several steps.
-                    req_info.reasoning_token_count += 1
-                    used_fallback = True
                 if self.debug_enabled:
                     logger.info(
                         "ReasoningBudget req=%s no penalty: "
@@ -474,6 +470,18 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                         req_info.valid_output_len(),
                         used_fallback,
                     )
+                continue
+            if req_info.valid_output_len() == 0:
+                # We do not have reliable token IDs for this request in this
+                # step (only placeholders), so skip soft-penalty application.
+                if self.debug_enabled and not req_info.missing_token_ids_logged:
+                    logger.warning(
+                        "ReasoningBudget req=%s skipping penalty due to missing "
+                        "valid output token ids (raw_len=%s).",
+                        req_idx,
+                        len(req_info.output_token_ids),
+                    )
+                    req_info.missing_token_ids_logged = True
                 continue
             # Soft penalty:
             # - Before threshold: unchanged.
