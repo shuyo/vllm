@@ -306,6 +306,7 @@ class _ReasoningBudgetReqInfo:
     reasoning_token_count: int = 0
     processed_len: int = 0
     missing_token_ids_logged: bool = False
+    using_surrogate_count: bool = False
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -342,7 +343,14 @@ class _ReasoningBudgetReqInfo:
         valid_tokens = self.valid_output_tokens()
         self.processed_len = len(valid_tokens)
         if not valid_tokens:
+            raw_len = len(self.output_token_ids)
+            if raw_len > 0:
+                # In some async paths, output IDs remain placeholders (-1).
+                # Fall back to raw generated length as surrogate progress.
+                self.reasoning_token_count = max(self.reasoning_token_count, raw_len)
+                self.using_surrogate_count = True
             return
+        self.using_surrogate_count = False
         if self.end_token_id in valid_tokens:
             # Only tokens before first end token are considered reasoning.
             first_end = valid_tokens.index(self.end_token_id)
@@ -471,18 +479,13 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                         used_fallback,
                     )
                 continue
-            if req_info.valid_output_len() == 0:
-                # We do not have reliable token IDs for this request in this
-                # step (only placeholders), so skip soft-penalty application.
-                if self.debug_enabled and not req_info.missing_token_ids_logged:
-                    logger.warning(
-                        "ReasoningBudget req=%s skipping penalty due to missing "
-                        "valid output token ids (raw_len=%s).",
-                        req_idx,
-                        len(req_info.output_token_ids),
-                    )
-                    req_info.missing_token_ids_logged = True
-                continue
+            if self.debug_enabled and req_info.using_surrogate_count:
+                logger.info(
+                    "ReasoningBudget req=%s applying penalty with surrogate "
+                    "reason_count based on raw_len=%s",
+                    req_idx,
+                    len(req_info.output_token_ids),
+                )
             # Soft penalty:
             # - Before threshold: unchanged.
             # - After threshold: negative bias for continuation side tokens.

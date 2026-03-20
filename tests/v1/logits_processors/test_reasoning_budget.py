@@ -155,7 +155,7 @@ def test_reasoning_budget_counts_non_prefix_valid_tokens():
     assert out[0, 1].item() < 0
 
 
-def test_reasoning_budget_no_penalty_when_only_placeholders():
+def test_reasoning_budget_uses_raw_len_surrogate_when_only_placeholders():
     output_token_ids: list[int] = [-1, -1, -1]
     params = SamplingParams(
         reasoning_soft_penalty_start_threshold=2,
@@ -176,10 +176,10 @@ def test_reasoning_budget_no_penalty_when_only_placeholders():
     )
 
     logits = torch.zeros(1, 8)
-    for _ in range(3):
-        out = processor.apply(logits.clone())
-        assert torch.equal(out, logits)
+    out = processor.apply(logits.clone())
+    # Surrogate count is based on raw_len=3, so threshold=2 is exceeded.
+    assert out[0, 1].item() < 0
 
-    # No reliable output token ids are present, so do not apply penalty.
     req_info = processor.req_info[0]
-    assert req_info.reasoning_token_count == 0
+    assert req_info.reasoning_token_count == 3
+    assert req_info.using_surrogate_count
