@@ -183,3 +183,7 @@ def test_reasoning_budget_uses_raw_len_surrogate_when_only_placeholders():
     req_info = processor.req_info[0]
     assert req_info.reasoning_token_count == 3
     assert req_info.using_surrogate_count
+
+    # Additional surrogate penalty applications should be skipped.
+    out2 = processor.apply(logits.clone())
+    assert torch.equal(out2, logits)

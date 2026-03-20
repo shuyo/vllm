@@ -308,6 +308,8 @@ class _ReasoningBudgetReqInfo:
     missing_token_ids_logged: bool = False
     using_surrogate_count: bool = False
     end_detected: bool = False
+    surrogate_bias_steps: int = 0
+    max_surrogate_bias_steps: int = 1
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -518,6 +520,18 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     req_idx,
                     len(req_info.output_token_ids),
                 )
+            if req_info.using_surrogate_count:
+                if req_info.surrogate_bias_steps >= req_info.max_surrogate_bias_steps:
+                    if self.debug_enabled:
+                        logger.info(
+                            "ReasoningBudget req=%s skipping additional surrogate "
+                            "bias (steps=%s max=%s) due to missing end detection.",
+                            req_idx,
+                            req_info.surrogate_bias_steps,
+                            req_info.max_surrogate_bias_steps,
+                        )
+                    continue
+                req_info.surrogate_bias_steps += 1
             # Soft penalty:
             # - Before threshold: unchanged.
             # - After threshold: negative bias for continuation side tokens.
