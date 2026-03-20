@@ -457,6 +457,31 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     pre_update,
                     req_info.debug_summary(),
                 )
+                if pre_update is not None:
+                    prev_reason_count = int(pre_update["reason_count"])
+                    prev_end_detected = bool(pre_update["end_in_valid"])
+                    delta = req_info.reasoning_token_count - prev_reason_count
+                    if delta > 0:
+                        logger.info(
+                            "ReasoningBudget req=%s reason_count progressed: "
+                            "%s -> %s (delta=%s, source=%s)",
+                            req_idx,
+                            prev_reason_count,
+                            req_info.reasoning_token_count,
+                            delta,
+                            "surrogate_raw_len"
+                            if req_info.using_surrogate_count
+                            else "valid_token_ids",
+                        )
+                    if req_info.end_detected and not prev_end_detected:
+                        logger.info(
+                            "ReasoningBudget req=%s detected reasoning end token: "
+                            "end_token_id=%s reason_count=%s valid_len=%s",
+                            req_idx,
+                            req_info.end_token_id,
+                            req_info.reasoning_token_count,
+                            req_info.valid_output_len(),
+                        )
             if not req_info.is_reasoning:
                 # Once reasoning has ended, prevent repeated emission of
                 # the reasoning-end token, but only if end was truly detected.
