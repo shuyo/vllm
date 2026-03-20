@@ -314,6 +314,29 @@ class _ReasoningBudgetReqInfo:
     def valid_output_len(self) -> int:
         return len(self.valid_output_tokens())
 
+    def debug_summary(self) -> dict[str, int | bool | list[int] | None]:
+        raw = self.output_token_ids
+        raw_len = len(raw)
+        raw_tail = raw[-8:]
+        num_negative = sum(1 for tok in raw if tok < 0)
+        first_nonneg = next((idx for idx, tok in enumerate(raw) if tok >= 0), None)
+        first_negative = next((idx for idx, tok in enumerate(raw) if tok < 0), None)
+        valid_tokens = self.valid_output_tokens()
+        return {
+            "raw_len": raw_len,
+            "num_negative": num_negative,
+            "first_nonneg": first_nonneg,
+            "first_negative": first_negative,
+            "raw_tail": raw_tail,
+            "valid_len": len(valid_tokens),
+            "valid_tail": valid_tokens[-8:],
+            "end_in_raw": self.end_token_id in raw,
+            "end_in_valid": self.end_token_id in valid_tokens,
+            "reason_count": self.reasoning_token_count,
+            "processed_len": self.processed_len,
+            "is_reasoning": self.is_reasoning,
+        }
+
     def update_from_output_tokens(self) -> None:
         valid_tokens = self.valid_output_tokens()
         self.processed_len = len(valid_tokens)
@@ -409,8 +432,16 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             return logits
 
         for req_idx, req_info in self.req_info.items():
+            pre_update = req_info.debug_summary() if self.debug_enabled else None
             req_info.update_from_output_tokens()
             req_logits = logits[req_idx]
+            if self.debug_enabled:
+                logger.info(
+                    "ReasoningBudget req=%s state: pre=%s post=%s",
+                    req_idx,
+                    pre_update,
+                    req_info.debug_summary(),
+                )
             if not req_info.is_reasoning:
                 # Once reasoning has ended, prevent repeated emission of
                 # the reasoning-end token.
@@ -427,18 +458,21 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                 continue
             penalty = req_info.current_penalty()
             if penalty <= 0:
+                used_fallback = False
                 if req_info.is_reasoning and req_info.valid_output_len() == 0:
                     # Fallback for async/spec paths where output IDs may remain
                     # placeholders for several steps.
                     req_info.reasoning_token_count += 1
+                    used_fallback = True
                 if self.debug_enabled:
                     logger.info(
                         "ReasoningBudget req=%s no penalty: "
-                        "reason_count=%s threshold=%s out_len=%s",
+                        "reason_count=%s threshold=%s out_len=%s fallback=%s",
                         req_idx,
                         req_info.reasoning_token_count,
                         req_info.start_threshold,
                         req_info.valid_output_len(),
+                        used_fallback,
                     )
                 continue
             # Soft penalty:
