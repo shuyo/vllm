@@ -308,8 +308,6 @@ class _ReasoningBudgetReqInfo:
     missing_token_ids_logged: bool = False
     using_surrogate_count: bool = False
     end_detected: bool = False
-    surrogate_bias_steps: int = 0
-    max_surrogate_bias_steps: int = 8
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -491,13 +489,12 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     logger.info(
                         "ReasoningBudget req=%s reasoning ended: "
                         "mask end_token_id=%s out_len=%s reason_count=%s "
-                        "end_detected=%s surrogate_steps=%s",
+                        "end_detected=%s",
                         req_idx,
                         req_info.end_token_id,
                         req_info.valid_output_len(),
                         req_info.reasoning_token_count,
                         req_info.end_detected,
-                        req_info.surrogate_bias_steps,
                     )
                 continue
             penalty = req_info.current_penalty()
@@ -521,18 +518,6 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     req_idx,
                     len(req_info.output_token_ids),
                 )
-            if req_info.using_surrogate_count:
-                req_info.surrogate_bias_steps += 1
-                if req_info.surrogate_bias_steps >= req_info.max_surrogate_bias_steps:
-                    # No reliable end-token visibility; avoid indefinite forcing.
-                    req_info.is_reasoning = False
-                    if self.debug_enabled:
-                        logger.warning(
-                            "ReasoningBudget req=%s stopping surrogate bias after "
-                            "%s steps without explicit end-token detection.",
-                            req_idx,
-                            req_info.surrogate_bias_steps,
-                        )
             # Soft penalty:
             # - Before threshold: unchanged.
             # - After threshold: negative bias for continuation side tokens.
