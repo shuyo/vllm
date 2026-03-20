@@ -307,6 +307,9 @@ class _ReasoningBudgetReqInfo:
     processed_len: int = 0
     missing_token_ids_logged: bool = False
     using_surrogate_count: bool = False
+    end_detected: bool = False
+    surrogate_bias_steps: int = 0
+    max_surrogate_bias_steps: int = 8
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -349,6 +352,7 @@ class _ReasoningBudgetReqInfo:
                 # Fall back to raw generated length as surrogate progress.
                 self.reasoning_token_count = max(self.reasoning_token_count, raw_len)
                 self.using_surrogate_count = True
+                self.end_detected = False
             return
         self.using_surrogate_count = False
         if self.end_token_id in valid_tokens:
@@ -356,9 +360,11 @@ class _ReasoningBudgetReqInfo:
             first_end = valid_tokens.index(self.end_token_id)
             self.reasoning_token_count = max(self.reasoning_token_count, first_end)
             self.is_reasoning = False
+            self.end_detected = True
             return
         self.reasoning_token_count = max(self.reasoning_token_count, len(valid_tokens))
         self.is_reasoning = True
+        self.end_detected = False
 
     def current_penalty(self) -> float:
         if not self.is_reasoning:
@@ -453,16 +459,20 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                 )
             if not req_info.is_reasoning:
                 # Once reasoning has ended, prevent repeated emission of
-                # the reasoning-end token.
-                req_logits[req_info.end_token_id] = -float("inf")
+                # the reasoning-end token, but only if end was truly detected.
+                if req_info.end_detected:
+                    req_logits[req_info.end_token_id] = -float("inf")
                 if self.debug_enabled:
                     logger.info(
                         "ReasoningBudget req=%s reasoning ended: "
-                        "mask end_token_id=%s out_len=%s reason_count=%s",
+                        "mask end_token_id=%s out_len=%s reason_count=%s "
+                        "end_detected=%s surrogate_steps=%s",
                         req_idx,
                         req_info.end_token_id,
                         req_info.valid_output_len(),
                         req_info.reasoning_token_count,
+                        req_info.end_detected,
+                        req_info.surrogate_bias_steps,
                     )
                 continue
             penalty = req_info.current_penalty()
@@ -486,6 +496,18 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                     req_idx,
                     len(req_info.output_token_ids),
                 )
+            if req_info.using_surrogate_count:
+                req_info.surrogate_bias_steps += 1
+                if req_info.surrogate_bias_steps >= req_info.max_surrogate_bias_steps:
+                    # No reliable end-token visibility; avoid indefinite forcing.
+                    req_info.is_reasoning = False
+                    if self.debug_enabled:
+                        logger.warning(
+                            "ReasoningBudget req=%s stopping surrogate bias after "
+                            "%s steps without explicit end-token detection.",
+                            req_idx,
+                            req_info.surrogate_bias_steps,
+                        )
             # Soft penalty:
             # - Before threshold: unchanged.
             # - After threshold: negative bias for continuation side tokens.
