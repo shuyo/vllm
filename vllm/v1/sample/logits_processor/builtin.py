@@ -317,13 +317,15 @@ class _ReasoningBudgetReqInfo:
     def update_from_output_tokens(self) -> None:
         valid_tokens = self.valid_output_tokens()
         self.processed_len = len(valid_tokens)
+        if not valid_tokens:
+            return
         if self.end_token_id in valid_tokens:
             # Only tokens before first end token are considered reasoning.
             first_end = valid_tokens.index(self.end_token_id)
-            self.reasoning_token_count = first_end
+            self.reasoning_token_count = max(self.reasoning_token_count, first_end)
             self.is_reasoning = False
             return
-        self.reasoning_token_count = len(valid_tokens)
+        self.reasoning_token_count = max(self.reasoning_token_count, len(valid_tokens))
         self.is_reasoning = True
 
     def current_penalty(self) -> float:
@@ -425,6 +427,10 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
                 continue
             penalty = req_info.current_penalty()
             if penalty <= 0:
+                if req_info.is_reasoning and req_info.valid_output_len() == 0:
+                    # Fallback for async/spec paths where output IDs may remain
+                    # placeholders for several steps.
+                    req_info.reasoning_token_count += 1
                 if self.debug_enabled:
                     logger.info(
                         "ReasoningBudget req=%s no penalty: "

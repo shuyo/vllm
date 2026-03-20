@@ -153,3 +153,36 @@ def test_reasoning_budget_counts_non_prefix_valid_tokens():
     out = processor.apply(logits.clone())
     # threshold reached => penalty is applied
     assert out[0, 1].item() < 0
+
+
+def test_reasoning_budget_fallback_counts_when_only_placeholders():
+    output_token_ids: list[int] = [-1, -1, -1]
+    params = SamplingParams(
+        reasoning_soft_penalty_start_threshold=2,
+        reasoning_soft_penalty_coefficient=1.0,
+        reasoning_soft_penalty_curve="linear",
+        reasoning_soft_penalty_end_token_id=3,
+    )
+    processor = ReasoningBudgetLogitsProcessor(
+        None, torch.device("cpu"), is_pin_memory=False
+    )
+    processor.update_state(
+        BatchUpdate(
+            batch_size=1,
+            removed=(),
+            moved=(),
+            added=((0, params, [], output_token_ids),),
+        )
+    )
+
+    logits = torch.zeros(1, 8)
+    for _ in range(3):
+        _ = processor.apply(logits.clone())
+
+    # Fallback counter should progress even when valid output ids are absent.
+    req_info = processor.req_info[0]
+    assert req_info.reasoning_token_count >= 3
+
+    out = processor.apply(logits.clone())
+    # After threshold, penalty should be active.
+    assert out[0, 1].item() < 0
