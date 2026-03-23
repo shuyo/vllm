@@ -268,6 +268,11 @@ class SamplingParams(
     allowed_token_ids: list[int] | None = None
     """If provided, the engine will construct a logits processor which only
     retains scores for the given token ids."""
+    
+    reasoning_budget_start_tokens: int | None = None
+    reasoning_budget_max_tokens: int | None = None
+    reasoning_end_token_id: int | None = None
+
     reasoning_soft_penalty_start_threshold: int | None = None
     """Reasoning soft penalty starts once generated reasoning tokens reach
     this threshold."""
@@ -327,6 +332,11 @@ class SamplingParams(
         structured_outputs: StructuredOutputsParams | None = None,
         logit_bias: dict[int, float] | dict[str, float] | None = None,
         allowed_token_ids: list[int] | None = None,
+
+        reasoning_budget_start_tokens: int | None = None,
+        reasoning_budget_max_tokens: int | None = None,
+        reasoning_end_token_id: int | None = None,
+
         reasoning_soft_penalty_start_threshold: int | None = None,
         reasoning_soft_penalty_coefficient: float | None = None,
         reasoning_soft_penalty_curve: str | None = None,
@@ -371,6 +381,11 @@ class SamplingParams(
             structured_outputs=structured_outputs,
             logit_bias=logit_bias,
             allowed_token_ids=allowed_token_ids,
+
+            reasoning_budget_start_tokens=reasoning_budget_start_tokens,
+            reasoning_budget_max_tokens=reasoning_budget_max_tokens,
+            reasoning_end_token_id=reasoning_end_token_id,
+
             reasoning_soft_penalty_start_threshold=(
                 reasoning_soft_penalty_start_threshold
             ),

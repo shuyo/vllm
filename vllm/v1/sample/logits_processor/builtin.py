@@ -299,17 +299,14 @@ class MinTokensLogitsProcessor(LogitsProcessor):
 class _ReasoningBudgetReqInfo:
     output_token_ids: list[int]
     end_token_id: int
-    start_threshold: int
-    coefficient: float
-    curve: str
+    start_tokens: int
+    max_tokens: int
     is_reasoning: bool = True
     reasoning_token_count: int = 0
     processed_len: int = 0
     missing_token_ids_logged: bool = False
-    using_surrogate_count: bool = False
     end_detected: bool = False
-    surrogate_bias_steps: int = 0
-    max_surrogate_bias_steps: int = 1
+    min_eor_logit_gap: float = 100 # minimum gap between max logit and end of reasoning token
 
     def valid_output_tokens(self) -> list[int]:
         # Async scheduling/spec decode may include -1 placeholders.
@@ -348,13 +345,9 @@ class _ReasoningBudgetReqInfo:
         if not valid_tokens:
             raw_len = len(self.output_token_ids)
             if raw_len > 0:
-                # In some async paths, output IDs remain placeholders (-1).
-                # Fall back to raw generated length as surrogate progress.
                 self.reasoning_token_count = max(self.reasoning_token_count, raw_len)
-                self.using_surrogate_count = True
                 self.end_detected = False
             return
-        self.using_surrogate_count = False
         if self.end_token_id in valid_tokens:
             # Only tokens before first end token are considered reasoning.
             first_end = valid_tokens.index(self.end_token_id)
@@ -365,22 +358,6 @@ class _ReasoningBudgetReqInfo:
         self.reasoning_token_count = max(self.reasoning_token_count, len(valid_tokens))
         self.is_reasoning = True
         self.end_detected = False
-
-    def current_penalty(self) -> float:
-        if not self.is_reasoning:
-            return 0.0
-
-        overflow = self.reasoning_token_count - self.start_threshold
-        if overflow < 0:
-            return 0.0
-        if self.curve == "linear":
-            return self.coefficient * (overflow + 1)
-        if self.curve == "quadratic":
-            growth = overflow + 1
-            return self.coefficient * (growth**2)
-        # "exp"
-        return self.coefficient * (2**overflow)
-
 
 class ReasoningBudgetLogitsProcessor(LogitsProcessor):
     """Soft-penalty logits processor for reasoning budget control."""
@@ -398,38 +375,28 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
     def add_request(
         params: SamplingParams, _: list[int] | None, output_tok_ids: list[int]
     ) -> _ReasoningBudgetReqInfo | None:
-        threshold = params.reasoning_soft_penalty_start_threshold
-        coefficient = params.reasoning_soft_penalty_coefficient
-        curve = params.reasoning_soft_penalty_curve
-        end_token_id = params.reasoning_soft_penalty_end_token_id
+        logger.info(f"SamplingParams: {params}")
+        logger.info(f"output_tok_ids: {output_tok_ids}")
+        start_tokens = params.reasoning_budget_start_tokens
+        max_tokens = params.reasoning_budget_max_tokens
+        end_token_id = params.reasoning_end_token_id
         if (
-            threshold is None
-            or coefficient is None
-            or curve is None
+            start_tokens is None
+            or max_tokens is None
             or end_token_id is None
-            or coefficient == 0
         ):
-            if logger.isEnabledFor(10):
-                logger.debug(
-                    "ReasoningBudget disabled for request: "
-                    "threshold=%s coefficient=%s curve=%s end_token_id=%s",
-                    threshold,
-                    coefficient,
-                    curve,
-                    end_token_id,
-                )
             return None
         req_info = _ReasoningBudgetReqInfo(
             output_token_ids=output_tok_ids,
             end_token_id=end_token_id,
-            start_threshold=threshold,
-            coefficient=coefficient,
-            curve=curve,
+            start_tokens=start_tokens,
+            max_tokens=max_tokens,
         )
         req_info.update_from_output_tokens()
         return req_info
 
     def update_state(self, batch_update: BatchUpdate | None):
+        #logger.info(f"batch_update: {batch_update}")
         process_dict_updates(self.req_info, batch_update, self.add_request)
         if self.debug_enabled and batch_update is not None:
             logger.info(
@@ -447,109 +414,43 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             return logits
 
         for req_idx, req_info in self.req_info.items():
-            pre_update = req_info.debug_summary() if self.debug_enabled else None
+            #pre_update = req_info.debug_summary() if self.debug_enabled else None
             req_info.update_from_output_tokens()
+            
+            count = req_info.reasoning_token_count
             req_logits = logits[req_idx]
+            end_reasoning_logit = req_logits[req_info.end_token_id]
+            max_logit = req_logits.max()
+            gap = max_logit - end_reasoning_logit
+
             if self.debug_enabled:
                 logger.info(
-                    "ReasoningBudget req=%s state: pre=%s post=%s",
-                    req_idx,
-                    pre_update,
-                    req_info.debug_summary(),
+                    f"ReasoningBudget apply: idx={req_idx} "
+                    f"count:{count}, is_reasoning:{req_info.is_reasoning}, "
+                    f"logit: end_token={end_reasoning_logit:.1f} max={max_logit:.1f} min_gap={req_info.min_eor_logit_gap:.1f}"
                 )
-                if pre_update is not None:
-                    prev_reason_count = int(pre_update["reason_count"])
-                    prev_end_detected = bool(pre_update["end_in_valid"])
-                    delta = req_info.reasoning_token_count - prev_reason_count
-                    if delta > 0:
-                        logger.info(
-                            "ReasoningBudget req=%s reason_count progressed: "
-                            "%s -> %s (delta=%s, source=%s)",
-                            req_idx,
-                            prev_reason_count,
-                            req_info.reasoning_token_count,
-                            delta,
-                            "surrogate_raw_len"
-                            if req_info.using_surrogate_count
-                            else "valid_token_ids",
-                        )
-                    if req_info.end_detected and not prev_end_detected:
-                        logger.info(
-                            "ReasoningBudget req=%s detected reasoning end token: "
-                            "end_token_id=%s reason_count=%s valid_len=%s",
-                            req_idx,
-                            req_info.end_token_id,
-                            req_info.reasoning_token_count,
-                            req_info.valid_output_len(),
-                        )
+
             if not req_info.is_reasoning:
-                # Once reasoning has ended, prevent repeated emission of
-                # the reasoning-end token, but only if end was truly detected.
-                if req_info.end_detected:
+                req_logits[req_info.end_token_id] = -float("inf")
+            elif count < req_info.start_tokens:
+                if end_reasoning_logit >= max_logit:
+                    req_logits[req_info.end_token_id] = max_logit+1000
+                else:
                     req_logits[req_info.end_token_id] = -float("inf")
-                if self.debug_enabled:
-                    logger.info(
-                        "ReasoningBudget req=%s reasoning ended: "
-                        "mask end_token_id=%s out_len=%s reason_count=%s "
-                        "end_detected=%s",
-                        req_idx,
-                        req_info.end_token_id,
-                        req_info.valid_output_len(),
-                        req_info.reasoning_token_count,
-                        req_info.end_detected,
-                    )
-                continue
-            penalty = req_info.current_penalty()
-            if penalty <= 0:
-                used_fallback = False
-                if self.debug_enabled:
-                    logger.info(
-                        "ReasoningBudget req=%s no penalty: "
-                        "reason_count=%s threshold=%s out_len=%s fallback=%s",
-                        req_idx,
-                        req_info.reasoning_token_count,
-                        req_info.start_threshold,
-                        req_info.valid_output_len(),
-                        used_fallback,
-                    )
-                continue
-            if self.debug_enabled and req_info.using_surrogate_count:
-                logger.info(
-                    "ReasoningBudget req=%s applying penalty with surrogate "
-                    "reason_count based on raw_len=%s",
-                    req_idx,
-                    len(req_info.output_token_ids),
-                )
-            if req_info.using_surrogate_count:
-                if req_info.surrogate_bias_steps >= req_info.max_surrogate_bias_steps:
-                    if self.debug_enabled:
-                        logger.info(
-                            "ReasoningBudget req=%s skipping additional surrogate "
-                            "bias (steps=%s max=%s) due to missing end detection.",
-                            req_idx,
-                            req_info.surrogate_bias_steps,
-                            req_info.max_surrogate_bias_steps,
-                        )
-                    continue
-                req_info.surrogate_bias_steps += 1
-            # Soft penalty:
-            # - Before threshold: unchanged.
-            # - After threshold: negative bias for continuation side tokens.
-            # - Positive bias for end token to encourage natural completion.
-            req_logits.sub_(penalty)
-            req_logits[req_info.end_token_id] += 2 * penalty
-            if self.debug_enabled:
-                logger.info(
-                    "ReasoningBudget req=%s apply penalty=%s curve=%s "
-                    "reason_count=%s threshold=%s end_token_id=%s out_tail=%s",
-                    req_idx,
-                    penalty,
-                    req_info.curve,
-                    req_info.reasoning_token_count,
-                    req_info.start_threshold,
-                    req_info.end_token_id,
-                    req_info.valid_output_tokens()[-8:],
-                )
+            elif count < req_info.max_tokens:
+                if req_info.min_eor_logit_gap > gap:
+                    req_logits[req_info.end_token_id] = max_logit+1000
+                    req_info.is_reasoning = False
+                else:
+                    req_logits[req_info.end_token_id] = -float("inf")
+            elif end_reasoning_logit < max_logit: # ignore if end_reasoing_token has probability of 1
+                req_logits[req_info.end_token_id] = max_logit+1000
+                req_info.is_reasoning = False
+
+            # exclude count==0 (because probability of quickly closing is too large)
+            if count > 0 and req_info.min_eor_logit_gap > gap:
+                req_info.min_eor_logit_gap = gap
+
         return logits
 
 
@@ -561,7 +462,6 @@ def process_dict_updates(
     """Utility function to update dict state for sparse LogitsProcessors."""
 
     if not batch_update:
-        # Nothing to do.
         return False
 
     updated = False
