@@ -2,14 +2,12 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-import os
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 import torch
 
 from vllm import SamplingParams
-from vllm.logger import init_logger
 from vllm.v1.sample.logits_processor.interface import (
     BatchUpdate,
     LogitsProcessor,
@@ -20,7 +18,6 @@ if TYPE_CHECKING:
     from vllm.config import VllmConfig
 
 T = TypeVar("T")
-logger = init_logger(__name__)
 
 
 class MinPLogitsProcessor(LogitsProcessor):
@@ -297,67 +294,12 @@ class MinTokensLogitsProcessor(LogitsProcessor):
 
 @dataclass
 class _ReasoningBudgetReqInfo:
-    output_token_ids: list[int]
     end_token_id: int
     start_tokens: int
     max_tokens: int
     is_reasoning: bool = True
     reasoning_token_count: int = 0
-    processed_len: int = 0
-    missing_token_ids_logged: bool = False
-    end_detected: bool = False
     min_eor_logit_gap: float = 100 # minimum gap between max logit and end of reasoning token
-
-    def valid_output_tokens(self) -> list[int]:
-        # Async scheduling/spec decode may include -1 placeholders.
-        # Treat only non-negative IDs as actual generated tokens.
-        return [tok for tok in self.output_token_ids if tok >= 0]
-
-    def valid_output_len(self) -> int:
-        return len(self.valid_output_tokens())
-
-    def debug_summary(self) -> dict[str, int | bool | list[int] | None]:
-        raw = self.output_token_ids
-        raw_len = len(raw)
-        raw_tail = raw[-8:]
-        num_negative = sum(1 for tok in raw if tok < 0)
-        first_nonneg = next((idx for idx, tok in enumerate(raw) if tok >= 0), None)
-        first_negative = next((idx for idx, tok in enumerate(raw) if tok < 0), None)
-        valid_tokens = self.valid_output_tokens()
-        return {
-            "raw_len": raw_len,
-            "num_negative": num_negative,
-            "first_nonneg": first_nonneg,
-            "first_negative": first_negative,
-            "raw_tail": raw_tail,
-            "valid_len": len(valid_tokens),
-            "valid_tail": valid_tokens[-8:],
-            "end_in_raw": self.end_token_id in raw,
-            "end_in_valid": self.end_token_id in valid_tokens,
-            "reason_count": self.reasoning_token_count,
-            "processed_len": self.processed_len,
-            "is_reasoning": self.is_reasoning,
-        }
-
-    def update_from_output_tokens(self) -> None:
-        valid_tokens = self.valid_output_tokens()
-        self.processed_len = len(valid_tokens)
-        if not valid_tokens:
-            raw_len = len(self.output_token_ids)
-            if raw_len > 0:
-                self.reasoning_token_count = max(self.reasoning_token_count, raw_len)
-                self.end_detected = False
-            return
-        if self.end_token_id in valid_tokens:
-            # Only tokens before first end token are considered reasoning.
-            first_end = valid_tokens.index(self.end_token_id)
-            self.reasoning_token_count = max(self.reasoning_token_count, first_end)
-            self.is_reasoning = False
-            self.end_detected = True
-            return
-        self.reasoning_token_count = max(self.reasoning_token_count, len(valid_tokens))
-        self.is_reasoning = True
-        self.end_detected = False
 
 class ReasoningBudgetLogitsProcessor(LogitsProcessor):
     """Soft-penalty logits processor for reasoning budget control."""
@@ -366,7 +308,6 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
         self.device = device
         self.pin_memory = is_pin_memory
         self.req_info: dict[int, _ReasoningBudgetReqInfo] = {}
-        self.debug_enabled = os.getenv("VLLM_DEBUG_REASONING_BUDGET", "") == "1"
 
     def is_argmax_invariant(self) -> bool:
         return False
@@ -375,8 +316,6 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
     def add_request(
         params: SamplingParams, _: list[int] | None, output_tok_ids: list[int]
     ) -> _ReasoningBudgetReqInfo | None:
-        logger.info(f"SamplingParams: {params}")
-        logger.info(f"output_tok_ids: {output_tok_ids}")
         start_tokens = params.reasoning_budget_start_tokens
         max_tokens = params.reasoning_budget_max_tokens
         end_token_id = params.reasoning_end_token_id
@@ -387,48 +326,25 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
         ):
             return None
         req_info = _ReasoningBudgetReqInfo(
-            output_token_ids=output_tok_ids,
             end_token_id=end_token_id,
             start_tokens=start_tokens,
             max_tokens=max_tokens,
         )
-        req_info.update_from_output_tokens()
         return req_info
 
     def update_state(self, batch_update: BatchUpdate | None):
-        #logger.info(f"batch_update: {batch_update}")
         process_dict_updates(self.req_info, batch_update, self.add_request)
-        if self.debug_enabled and batch_update is not None:
-            logger.info(
-                "ReasoningBudget update_state: batch_size=%s active_reqs=%s "
-                "added=%s removed=%s moved=%s",
-                batch_update.batch_size,
-                sorted(self.req_info.keys()),
-                len(batch_update.added),
-                len(batch_update.removed),
-                len(batch_update.moved),
-            )
 
     def apply(self, logits: torch.Tensor) -> torch.Tensor:
         if not self.req_info:
             return logits
 
         for req_idx, req_info in self.req_info.items():
-            #pre_update = req_info.debug_summary() if self.debug_enabled else None
-            req_info.update_from_output_tokens()
-            
             count = req_info.reasoning_token_count
             req_logits = logits[req_idx]
             end_reasoning_logit = req_logits[req_info.end_token_id]
             max_logit = req_logits.max()
             gap = max_logit - end_reasoning_logit
-
-            if self.debug_enabled:
-                logger.info(
-                    f"ReasoningBudget apply: idx={req_idx} "
-                    f"count:{count}, is_reasoning:{req_info.is_reasoning}, "
-                    f"logit: end_token={end_reasoning_logit:.1f} max={max_logit:.1f} min_gap={req_info.min_eor_logit_gap:.1f}"
-                )
 
             if not req_info.is_reasoning:
                 req_logits[req_info.end_token_id] = -float("inf")
@@ -450,6 +366,7 @@ class ReasoningBudgetLogitsProcessor(LogitsProcessor):
             # exclude count==0 (because probability of quickly closing is too large)
             if count > 0 and req_info.min_eor_logit_gap > gap:
                 req_info.min_eor_logit_gap = gap
+            req_info.reasoning_token_count += 1
 
         return logits
 
