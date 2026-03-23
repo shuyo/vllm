@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
@@ -287,6 +288,85 @@ class MinTokensLogitsProcessor(LogitsProcessor):
                 torch.from_numpy(toks_arr).to(self.device, non_blocking=True),
             )
             logits.index_put_(logits_slice, self.neg_inf_tensor)
+
+        return logits
+
+
+@dataclass
+class _ReasoningBudgetReqInfo:
+    end_token_id: int
+    start_tokens: int
+    max_tokens: int
+    is_reasoning: bool = True
+    reasoning_token_count: int = 0
+    min_eor_logit_gap: float = 100 # minimum gap between max logit and end of reasoning token
+
+class ReasoningBudgetLogitsProcessor(LogitsProcessor):
+    """Soft-penalty logits processor for reasoning budget control."""
+
+    def __init__(self, _, device: torch.device, is_pin_memory: bool):
+        self.device = device
+        self.pin_memory = is_pin_memory
+        self.req_info: dict[int, _ReasoningBudgetReqInfo] = {}
+
+    def is_argmax_invariant(self) -> bool:
+        return False
+
+    @staticmethod
+    def add_request(
+        params: SamplingParams, _: list[int] | None, output_tok_ids: list[int]
+    ) -> _ReasoningBudgetReqInfo | None:
+        start_tokens = params.reasoning_budget_start_tokens
+        max_tokens = params.reasoning_budget_max_tokens
+        end_token_id = params.reasoning_end_token_id
+        if (
+            start_tokens is None
+            or max_tokens is None
+            or end_token_id is None
+        ):
+            return None
+        req_info = _ReasoningBudgetReqInfo(
+            end_token_id=end_token_id,
+            start_tokens=start_tokens,
+            max_tokens=max_tokens,
+        )
+        return req_info
+
+    def update_state(self, batch_update: BatchUpdate | None):
+        process_dict_updates(self.req_info, batch_update, self.add_request)
+
+    def apply(self, logits: torch.Tensor) -> torch.Tensor:
+        if not self.req_info:
+            return logits
+
+        for req_idx, req_info in self.req_info.items():
+            count = req_info.reasoning_token_count
+            req_logits = logits[req_idx]
+            end_reasoning_logit = req_logits[req_info.end_token_id]
+            max_logit = req_logits.max()
+            gap = max_logit - end_reasoning_logit
+
+            if not req_info.is_reasoning:
+                req_logits[req_info.end_token_id] = -float("inf")
+            elif count < req_info.start_tokens:
+                if end_reasoning_logit >= max_logit:
+                    req_logits[req_info.end_token_id] = max_logit+1000
+                else:
+                    req_logits[req_info.end_token_id] = -float("inf")
+            elif count < req_info.max_tokens:
+                if req_info.min_eor_logit_gap > gap:
+                    req_logits[req_info.end_token_id] = max_logit+1000
+                    req_info.is_reasoning = False
+                else:
+                    req_logits[req_info.end_token_id] = -float("inf")
+            elif end_reasoning_logit < max_logit: # ignore if end_reasoing_token has probability of 1
+                req_logits[req_info.end_token_id] = max_logit+1000
+                req_info.is_reasoning = False
+
+            # exclude count==0 (because probability of quickly closing is too large)
+            if count > 0 and req_info.min_eor_logit_gap > gap:
+                req_info.min_eor_logit_gap = gap
+            req_info.reasoning_token_count += 1
 
         return logits
 

@@ -273,6 +273,14 @@ class SamplingParams(
     implementations, plugins, etc. Not used by any in-tree sampling
     implementations."""
 
+    # Reasoning Budget
+    reasoning_budget_start_tokens: int | None = None
+    """Reasoning Budget Start Token Position"""
+    reasoning_budget_max_tokens: int | None = None
+    """Reasoning Budget Max(Limit) Token Position"""
+    reasoning_end_token_id: int | None = None
+    """Reasoning End Token ID (e.g. </think>)"""
+
     # Fields used for bad words
     bad_words: list[str] | None = None
     """Words that are not allowed to be generated. More precisely, only the
@@ -317,6 +325,9 @@ class SamplingParams(
         structured_outputs: StructuredOutputsParams | None = None,
         logit_bias: dict[int, float] | dict[str, float] | None = None,
         allowed_token_ids: list[int] | None = None,
+        reasoning_budget_start_tokens: int | None = None,
+        reasoning_budget_max_tokens: int | None = None,
+        reasoning_end_token_id: int | None = None,
         extra_args: dict[str, Any] | None = None,
         skip_clone: bool = False,
         repetition_detection: RepetitionDetectionParams | None = None,
@@ -357,6 +368,9 @@ class SamplingParams(
             structured_outputs=structured_outputs,
             logit_bias=logit_bias,
             allowed_token_ids=allowed_token_ids,
+            reasoning_budget_start_tokens=reasoning_budget_start_tokens,
+            reasoning_budget_max_tokens=reasoning_budget_max_tokens,
+            reasoning_end_token_id=reasoning_end_token_id,
             extra_args=extra_args,
             skip_clone=skip_clone,
             repetition_detection=repetition_detection,

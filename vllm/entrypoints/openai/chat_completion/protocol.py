@@ -344,6 +344,10 @@ class ChatCompletionRequest(OpenAIBaseModel):
         ),
     )
 
+    reasoning_budget_start_tokens: int | None = Field(default=None, description="Number of tokens to start Reasoning Budget process")
+    reasoning_budget_max_tokens: int | None = Field(default=None, description="Maximum number of Reasoning tokens")
+    reasoning_end_token_id: int | None = Field(default=None, description="End token ID of Reasoning")
+
     repetition_detection: RepetitionDetectionParams | None = Field(
         default=None,
         description="Parameters for detecting repetitive N-gram patterns "
@@ -516,6 +520,11 @@ class ChatCompletionRequest(OpenAIBaseModel):
             logit_bias=self.logit_bias,
             bad_words=self.bad_words,
             allowed_token_ids=self.allowed_token_ids,
+
+            reasoning_budget_start_tokens=self.reasoning_budget_start_tokens,
+            reasoning_budget_max_tokens=self.reasoning_budget_max_tokens,
+            reasoning_end_token_id=self.reasoning_end_token_id,
+
             extra_args=extra_args or None,
             skip_clone=True,  # Created fresh per request, safe to skip clone
             repetition_detection=self.repetition_detection,
