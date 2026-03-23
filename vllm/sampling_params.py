@@ -268,25 +268,18 @@ class SamplingParams(
     allowed_token_ids: list[int] | None = None
     """If provided, the engine will construct a logits processor which only
     retains scores for the given token ids."""
-    
-    reasoning_budget_start_tokens: int | None = None
-    reasoning_budget_max_tokens: int | None = None
-    reasoning_end_token_id: int | None = None
-
-    reasoning_soft_penalty_start_threshold: int | None = None
-    """Reasoning soft penalty starts once generated reasoning tokens reach
-    this threshold."""
-    reasoning_soft_penalty_coefficient: float | None = None
-    """Base coefficient for reasoning soft penalty."""
-    reasoning_soft_penalty_curve: str | None = None
-    """Growth curve for reasoning soft penalty. Supported values:
-    linear, quadratic, exp."""
-    reasoning_soft_penalty_end_token_id: int | None = None
-    """Token id used as a positive-bias target to encourage reasoning stop."""
     extra_args: dict[str, Any] | None = None
     """Arbitrary additional args, that can be used by custom sampling
     implementations, plugins, etc. Not used by any in-tree sampling
     implementations."""
+
+    # Reasoning Budget
+    reasoning_budget_start_tokens: int | None = None
+    """Reasoning Budget Start Token Position"""
+    reasoning_budget_max_tokens: int | None = None
+    """Reasoning Budget Max(Limit) Token Position"""
+    reasoning_end_token_id: int | None = None
+    """Reasoning End Token ID (e.g. </think>)"""
 
     # Fields used for bad words
     bad_words: list[str] | None = None
@@ -332,15 +325,9 @@ class SamplingParams(
         structured_outputs: StructuredOutputsParams | None = None,
         logit_bias: dict[int, float] | dict[str, float] | None = None,
         allowed_token_ids: list[int] | None = None,
-
         reasoning_budget_start_tokens: int | None = None,
         reasoning_budget_max_tokens: int | None = None,
         reasoning_end_token_id: int | None = None,
-
-        reasoning_soft_penalty_start_threshold: int | None = None,
-        reasoning_soft_penalty_coefficient: float | None = None,
-        reasoning_soft_penalty_curve: str | None = None,
-        reasoning_soft_penalty_end_token_id: int | None = None,
         extra_args: dict[str, Any] | None = None,
         skip_clone: bool = False,
         repetition_detection: RepetitionDetectionParams | None = None,
@@ -381,17 +368,9 @@ class SamplingParams(
             structured_outputs=structured_outputs,
             logit_bias=logit_bias,
             allowed_token_ids=allowed_token_ids,
-
             reasoning_budget_start_tokens=reasoning_budget_start_tokens,
             reasoning_budget_max_tokens=reasoning_budget_max_tokens,
             reasoning_end_token_id=reasoning_end_token_id,
-
-            reasoning_soft_penalty_start_threshold=(
-                reasoning_soft_penalty_start_threshold
-            ),
-            reasoning_soft_penalty_coefficient=reasoning_soft_penalty_coefficient,
-            reasoning_soft_penalty_curve=reasoning_soft_penalty_curve,
-            reasoning_soft_penalty_end_token_id=reasoning_soft_penalty_end_token_id,
             extra_args=extra_args,
             skip_clone=skip_clone,
             repetition_detection=repetition_detection,

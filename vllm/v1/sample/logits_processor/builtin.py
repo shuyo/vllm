@@ -462,6 +462,7 @@ def process_dict_updates(
     """Utility function to update dict state for sparse LogitsProcessors."""
 
     if not batch_update:
+        # Nothing to do.
         return False
 
     updated = False
