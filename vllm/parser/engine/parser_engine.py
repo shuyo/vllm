@@ -115,6 +115,14 @@ class ParserEngine(Parser):
             or parser_engine_config.initial_state == ParserState.REASONING
         )
         self._reasoning_ended: bool = not self._has_reasoning
+        wait_for_reasoning = parser_engine_config.wait_for_reasoning
+        if wait_for_reasoning is None:
+            wait_for_reasoning = (
+                parser_engine_config.initial_state is ParserState.REASONING
+            )
+        self._reasoning_impossible: bool = (
+            not wait_for_reasoning and self._reasoning_unreachable(parser_engine_config)
+        )
         self._streaming_initialized: bool = False
         self._prompt_streaming_prepared: bool = False
 
@@ -612,6 +620,30 @@ class ParserEngine(Parser):
     # ── Reasoning state queries ───────────────────────────────────────
 
     @staticmethod
+    def _reasoning_unreachable(config: ParserEngineConfig) -> bool:
+        """Whether no transition path leads from ``initial_state`` to
+        ``REASONING``.
+
+        The reasoning token count only advances for content consumed in the
+        ``REASONING`` state, so such grammars count zero for every input.
+        """
+        if config.initial_state is ParserState.REASONING:
+            return False
+        outgoing: dict[ParserState, set[ParserState]] = {}
+        for (state, _terminal), transition in config.transitions.items():
+            outgoing.setdefault(state, set()).add(transition.next_state)
+        seen = {config.initial_state}
+        frontier = [config.initial_state]
+        while frontier:
+            for next_state in outgoing.get(frontier.pop(), ()):
+                if next_state is ParserState.REASONING:
+                    return False
+                if next_state not in seen:
+                    seen.add(next_state)
+                    frontier.append(next_state)
+        return True
+
+    @staticmethod
     def _derive_reasoning_end_token_ids(
         config: ParserEngineConfig, vocab: dict[str, int]
     ) -> frozenset[int]:
@@ -637,6 +669,16 @@ class ParserEngine(Parser):
     @property
     def reasoning_end_token_ids(self) -> frozenset[int]:
         return self._reasoning_end_token_ids
+
+    @property
+    def reasoning_impossible(self) -> bool:
+        """Whether this grammar can never emit reasoning content.
+
+        True when the config does not wait for reasoning and the state
+        machine has no path to the ``REASONING`` state, so the reasoning
+        token count stays zero for every input.
+        """
+        return self._reasoning_impossible
 
     def find_reasoning_end_offset(self, token_ids: Sequence[int]) -> int | None:
         end_ids = self._reasoning_end_token_ids

@@ -44,6 +44,13 @@ def parser(mock_tokenizer):
     )
 
 
+def test_arg_structural_chars_cover_tag_and_whitespace():
+    """Whitespace is structural because the parameter-tag grammar is
+    ``<\s*parameter\s*=\s*``; deltas without any of these characters can
+    skip the streaming arg reparse."""
+    assert qwen3_config().arg_structural_chars == frozenset(" \n\t\r<>=")
+
+
 class TestNonStreaming:
     def test_no_tool_calls(self, parser, mock_request):
         result = parser.extract_tool_calls(

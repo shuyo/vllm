@@ -196,6 +196,9 @@ def qwen3_config(
             ),
         },
         arg_converter=_qwen3_arg_converter,
+        # Whitespace is structural too: the parameter-tag grammar is
+        # ``<\s*parameter\s*=\s*``, so whitespace can open or close tags.
+        arg_structural_chars=frozenset(" \n\t\r<>="),
         stream_arg_deltas=True,
         strip_trailing_reasoning_whitespace=False,
         tool_args_json=False,

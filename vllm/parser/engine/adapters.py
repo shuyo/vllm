@@ -136,6 +136,8 @@ class ParserEngineReasoningAdapter(ReasoningParser):
         return self._parser_engine.get_streaming_fallback_content(text, request)
 
     def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
+        if self._parser_engine.reasoning_impossible:
+            return 0
         if self._streaming_count_valid:
             return self._parser_engine.count_reasoning_tokens(token_ids)
         if not token_ids:

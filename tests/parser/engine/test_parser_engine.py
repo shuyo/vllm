@@ -956,6 +956,16 @@ class _CombinedDelegating(DelegatingParser):
     tool_parser_cls = _CombinedToolAdapter
 
 
+class _NoReasoningTestEngine(ParserEngine):
+    def __init__(self, tokenizer, tools=None, **kwargs):
+        super().__init__(
+            tokenizer, tools, parser_engine_config=_hermes_config(), **kwargs
+        )
+
+
+_NoReasoningReasoningAdapter, _ = make_adapters(_NoReasoningTestEngine)
+
+
 def test_parser_manager_preserves_shared_engine_adapters(monkeypatch):
     monkeypatch.setattr(
         ParserManager,
@@ -1083,6 +1093,36 @@ def test_reasoning_adapter_counts_after_final_non_streaming_parse():
     parser.extract_reasoning("ab</think>c", request)
 
     assert parser.count_reasoning_tokens(token_ids) == 2
+
+
+class TestReasoningImpossible:
+    """``reasoning_impossible`` flags grammars whose reasoning token count
+    is zero for every input, letting callers skip the O(n^2) reparse
+    fallback in :meth:`ParserEngineReasoningAdapter.count_reasoning_tokens`."""
+
+    def test_unreachable_reasoning_state_is_impossible(self):
+        # Tool-call-only grammar: no path to REASONING and no wait.
+        assert _make_engine(_hermes_config()).reasoning_impossible
+
+    def test_reasoning_initial_state_is_possible(self):
+        # Combined grammar starts in REASONING.
+        assert not _make_engine(_combined_config()).reasoning_impossible
+
+    def test_transition_into_reasoning_is_possible(self):
+        # CONTENT initial state but a CONTENT -> REASONING transition keeps
+        # reasoning reachable, so the count can still advance.
+        cfg = dataclasses.replace(_combined_config(), initial_state=ParserState.CONTENT)
+        assert not _make_engine(cfg).reasoning_impossible
+
+
+def test_reasoning_adapter_short_circuits_unreachable_reasoning():
+    """A grammar that can never enter REASONING counts 0 without ever
+    constructing the decode-and-reparse fallback engine."""
+    adapter = _NoReasoningReasoningAdapter(make_mock_tokenizer(_VOCAB))
+    token_ids = [ord("a"), ord("b"), 202, 203, ord("c")]
+
+    assert adapter.count_reasoning_tokens(token_ids) == 0
+    assert adapter._counting_parser_engine is None
 
 
 def _make_delegating_request():

@@ -667,14 +667,17 @@ class OpenAIServingChat(GenerateBaseServing):
                     else:
                         delta_message = DeltaMessage(content=delta_text)
 
-                    previous_texts[i] += delta_text
+                    # previous_texts is only read by the output-logging block
+                    # below; skip the per-token O(n) copy when it won't run.
+                    if self.enable_log_outputs and self.request_logger and delta_text:
+                        previous_texts[i] += delta_text
 
                     # set the previous values for the next iteration
                     previous_num_tokens[i] += len(output.token_ids)
                     if parser is not None:
                         generated_token_ids[i].extend(output.token_ids)
                         previous_reasoning_tokens[i] = parser.count_reasoning_tokens(
-                            tuple(generated_token_ids[i])
+                            generated_token_ids[i]
                         )
 
                     # if the message delta is None (e.g. because it was a
